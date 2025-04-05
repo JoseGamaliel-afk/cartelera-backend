@@ -7,8 +7,6 @@ const cors = require('cors');
 const stream = require('stream');
 const xss = require('xss'); // Para sanitizar entradas
 const helmet = require('helmet'); // Para agregar cabeceras de seguridad
-const path = require('path'); // Para manejar rutas de archivos
-const jwt = require('jsonwebtoken'); // Para manejo de autenticación
 
 const app = express();
 app.use(express.json());
@@ -50,18 +48,6 @@ const FTP_CONFIG = {
 
 const FTP_BASE_PATH = process.env.FTP_BASE_PATH;
 const PUBLIC_URL = process.env.PUBLIC_URL;
-
-// Función para verificar JWT en cabeceras
-const verifyToken = (req, res, next) => {
-  const token = req.headers['authorization'];
-  if (!token) return res.status(403).send('Token no proporcionado');
-
-  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-    if (err) return res.status(403).send('Token inválido');
-    req.user = user;
-    next();
-  });
-};
 
 // --- Rutas FTP ---
 app.post('/upload', upload.single('file'), async (req, res) => {
@@ -133,7 +119,7 @@ app.get('/movies', (req, res) => {
   });
 });
 
-app.post('/movies', verifyToken, (req, res) => {
+app.post('/movies', (req, res) => {
   const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen } = req.body;
   if (!strNombre || !strGenero || !strSinapsis || !strHorario || !idSala || !strImagen) {
     return res.status(400).json({ error: 'Faltan parámetros' });
@@ -154,7 +140,7 @@ app.post('/movies', verifyToken, (req, res) => {
   });
 });
 
-app.put('/movies/:id', verifyToken, (req, res) => {
+app.put('/movies/:id', (req, res) => {
   const { id } = req.params;
   const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen } = req.body;
   if (!strNombre || !strGenero || !strSinapsis || !strHorario || !idSala || !strImagen) {
@@ -176,20 +162,12 @@ app.put('/movies/:id', verifyToken, (req, res) => {
   });
 });
 
-app.delete('/movies/:id', verifyToken, (req, res) => {
+app.delete('/movies/:id', (req, res) => {
   const { id } = req.params;
   db.query('DELETE FROM cine WHERE id = ?', [id], (err) => {
     if (err) return res.status(500).send('Error al eliminar película.');
     res.send({ message: 'Película eliminada correctamente' });
   });
-});
-
-// --- Rutas de Admin ---
-app.get('/admin', verifyToken, (req, res) => {
-  if (req.user.rol !== 'admin') {
-    return res.status(403).send('No tienes permisos para acceder a esta página.');
-  }
-  res.send('Página de administración');
 });
 
 // --- Inicio de sesión ---
@@ -205,15 +183,25 @@ app.post('/login', (req, res) => {
     if (results.length === 0) return res.status(401).json({ error: 'Credenciales inválidas o usuario inactivo' });
 
     const usuario = results[0];
-
-    // Generar el token JWT
-    const token = jwt.sign({ id: usuario.id, nombre: usuario.strNombre, rol: usuario.rol }, process.env.JWT_SECRET, { expiresIn: '1h' });
-
     res.json({
-      token
+      id: usuario.id,
+      nombre: usuario.strNombre,
+      rol: usuario.rol
     });
   });
 });
+
+// Probar conexión al servidor FTP
+(async () => {
+  try {
+    const client = new ftp.Client();
+    await client.access(FTP_CONFIG);
+    console.log('✅ Conexión exitosa al servidor FTP');
+    client.close();
+  } catch (error) {
+    console.error('❌ Error de conexión al servidor FTP:', error);
+  }
+})();
 
 // Servidor
 const PORT = process.env.PORT || 3000;
