@@ -1,25 +1,17 @@
-require('dotenv').config();
+require('dotenv').config(); // Cargar variables de entorno
 const express = require('express');
 const multer = require('multer');
 const ftp = require('basic-ftp');
 const mysql = require('mysql2');
 const cors = require('cors');
 const stream = require('stream');
-const xss = require('xss');
-const helmet = require('helmet');
+const xss = require('xss'); // Para sanitizar entradas
+const helmet = require('helmet'); // Para agregar cabeceras de seguridad
 
 const app = express();
-
-// Configuración mejorada de CORS
-app.use(cors({
-  origin: ['https://cartelera-jw8a.onrender.com', 'http://localhost:4200'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
-app.use(helmet());
 app.use(express.json());
+app.use(cors());
+app.use(helmet()); // Protección básica contra XSS y otras vulnerabilidades
 
 // Configuración de MySQL
 const db = mysql.createPool({
@@ -37,10 +29,14 @@ db.getConnection((err, connection) => {
   if (err) {
     console.error('Error de conexión a la base de datos:', err);
   } else {
-    console.log('✅ Conexión exitosa a la base de datos');
+    console.log('Conexión exitosa a la base de datos');
     connection.release();
   }
 });
+
+// Multer: almacenamiento en memoria para archivos subidos
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
 
 // Configuración FTP
 const FTP_CONFIG = {
@@ -50,69 +46,141 @@ const FTP_CONFIG = {
   secure: false
 };
 
-const FTP_BASE_PATH = process.env.FTP_BASE_PATH || '/uploads';
-const PUBLIC_URL = process.env.PUBLIC_URL || 'https://cartelera-jw8a.onrender.com/uploads';
-
-// --- Middleware para rutas API ---
-const apiRouter = express.Router();
-app.use('/api', apiRouter);
+const FTP_BASE_PATH = process.env.FTP_BASE_PATH;
+const PUBLIC_URL = process.env.PUBLIC_URL;
 
 // --- Rutas FTP ---
-const upload = multer({ storage: multer.memoryStorage() });
-
-apiRouter.post('/ftp/upload', upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+app.post('/upload', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).send('No file uploaded.');
 
   try {
     const client = new ftp.Client();
     await client.access(FTP_CONFIG);
     await client.ensureDir(FTP_BASE_PATH);
 
-    const filePath = `${FTP_BASE_PATH}/${Date.now()}_${req.file.originalname}`;
+    const filePath = `${FTP_BASE_PATH}/${req.file.originalname}`;
     const bufferStream = stream.Readable.from(req.file.buffer);
     await client.uploadFrom(bufferStream, filePath);
     client.close();
 
-    res.json({
+    res.send({
       message: 'Archivo subido con éxito',
-      url: `${PUBLIC_URL}/${filePath.split('/').pop()}`
+      url: `${PUBLIC_URL}/${req.file.originalname}`
     });
   } catch (err) {
-    console.error('FTP Error:', err);
-    res.status(500).json({ error: 'Error al subir el archivo' });
+    console.error(err);
+    res.status(500).send('Error al subir el archivo al FTP.');
   }
 });
 
-// --- Rutas de Autenticación ---
-const authRouter = express.Router();
-apiRouter.use('/auth', authRouter);
+app.get('/list', async (req, res) => {
+  try {
+    const client = new ftp.Client();
+    await client.access(FTP_CONFIG);
+    await client.cd(FTP_BASE_PATH);
+    const fileList = await client.list();
+    client.close();
 
-authRouter.post('/login', (req, res) => {
-  const { strNombre, strPwd } = req.body;
-  
-  if (!strNombre || !strPwd) {
-    return res.status(400).json({ 
-      error: 'Credenciales requeridas',
-      code: 'CREDENTIALS_MISSING'
-    });
+    res.send(
+      fileList.map(file => ({
+        name: file.name,
+        size: file.size,
+        url: `${PUBLIC_URL}/${file.name}`
+      }))
+    );
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error al listar archivos.');
+  }
+});
+
+app.delete('/delete', async (req, res) => {
+  const { fileName } = req.body;
+  if (!fileName) return res.status(400).send('File name is required.');
+
+  try {
+    const client = new ftp.Client();
+    await client.access(FTP_CONFIG);
+    await client.remove(`${FTP_BASE_PATH}/${fileName}`);
+    client.close();
+
+    res.send({ message: `Archivo ${fileName} eliminado correctamente.` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error al eliminar archivo.');
+  }
+});
+
+// --- Rutas de Películas ---
+app.get('/movies', (req, res) => {
+  db.query('SELECT * FROM cine', (err, results) => {
+    if (err) return res.status(500).send('Error en consulta a la base de datos.');
+    res.send(results);
+  });
+});
+
+app.post('/movies', (req, res) => {
+  const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen } = req.body;
+  if (!strNombre || !strGenero || !strSinapsis || !strHorario || !idSala || !strImagen) {
+    return res.status(400).json({ error: 'Faltan parámetros' });
   }
 
-  const query = `SELECT id, strNombre, idEstadoUsuario, rol 
-                FROM login 
-                WHERE strNombre = ? AND strPwd = ? AND idEstadoUsuario = 1`;
-  
-  db.query(query, [xss(strNombre), xss(strPwd)], (err, results) => {
-    if (err) {
-      console.error('DB Error:', err);
-      return res.status(500).json({ error: 'Error del servidor', code: 'DB_ERROR' });
-    }
-    
-    if (results.length === 0) {
-      return res.status(401).json({ 
-        error: 'Credenciales inválidas o usuario inactivo',
-        code: 'INVALID_CREDENTIALS' 
-      });
-    }
+  // Sanitización de entradas para evitar XSS
+  const sanitizedStrNombre = xss(strNombre);
+  const sanitizedStrGenero = xss(strGenero);
+  const sanitizedStrSinapsis = xss(strSinapsis);
+  const sanitizedStrHorario = xss(strHorario);
+  const sanitizedStrImagen = xss(strImagen);
+
+  const query = `INSERT INTO cine (strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen)
+                 VALUES (?, ?, ?, ?, ?, ?)`;
+  db.query(query, [sanitizedStrNombre, sanitizedStrGenero, sanitizedStrSinapsis, sanitizedStrHorario, idSala, sanitizedStrImagen], (err, result) => {
+    if (err) return res.status(500).send('Error al agregar película.');
+    res.status(201).send({ message: 'Película agregada correctamente', id: result.insertId });
+  });
+});
+
+app.put('/movies/:id', (req, res) => {
+  const { id } = req.params;
+  const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen } = req.body;
+  if (!strNombre || !strGenero || !strSinapsis || !strHorario || !idSala || !strImagen) {
+    return res.status(400).json({ error: 'Faltan parámetros' });
+  }
+
+  // Sanitización de entradas
+  const sanitizedStrNombre = xss(strNombre);
+  const sanitizedStrGenero = xss(strGenero);
+  const sanitizedStrSinapsis = xss(strSinapsis);
+  const sanitizedStrHorario = xss(strHorario);
+  const sanitizedStrImagen = xss(strImagen);
+
+  const query = `UPDATE cine SET strNombre = ?, strGenero = ?, strSinapsis = ?, strHorario = ?, idSala = ?, strImagen = ?
+                 WHERE id = ?`;
+  db.query(query, [sanitizedStrNombre, sanitizedStrGenero, sanitizedStrSinapsis, sanitizedStrHorario, idSala, sanitizedStrImagen, id], (err) => {
+    if (err) return res.status(500).send('Error al actualizar película.');
+    res.send({ message: 'Película actualizada correctamente' });
+  });
+});
+
+app.delete('/movies/:id', (req, res) => {
+  const { id } = req.params;
+  db.query('DELETE FROM cine WHERE id = ?', [id], (err) => {
+    if (err) return res.status(500).send('Error al eliminar película.');
+    res.send({ message: 'Película eliminada correctamente' });
+  });
+});
+
+// --- Inicio de sesión ---
+app.post('/login', (req, res) => {
+  const { strNombre, strPwd } = req.body;
+  if (!strNombre || !strPwd) {
+    return res.status(400).json({ error: 'Faltan credenciales' });
+  }
+
+  const query = 'SELECT id, strNombre, idEstadoUsuario, rol FROM login WHERE strNombre = ? AND strPwd = ? AND idEstadoUsuario = 1';
+  db.query(query, [strNombre, strPwd], (err, results) => {
+    if (err) return res.status(500).json({ error: 'Error del servidor' });
+    if (results.length === 0) return res.status(401).json({ error: 'Credenciales inválidas o usuario inactivo' });
 
     const usuario = results[0];
     res.json({
@@ -123,34 +191,20 @@ authRouter.post('/login', (req, res) => {
   });
 });
 
-// --- Rutas de Películas ---
-const moviesRouter = express.Router();
-apiRouter.use('/movies', moviesRouter);
+// Probar conexión al servidor FTP
+(async () => {
+  try {
+    const client = new ftp.Client();
+    await client.access(FTP_CONFIG);
+    console.log('✅ Conexión exitosa al servidor FTP');
+    client.close();
+  } catch (error) {
+    console.error('❌ Error de conexión al servidor FTP:', error);
+  }
+})();
 
-moviesRouter.get('/', (req, res) => {
-  db.query('SELECT * FROM cine', (err, results) => {
-    if (err) {
-      console.error('DB Error:', err);
-      return res.status(500).json({ error: 'Error en la consulta' });
-    }
-    res.json(results);
-  });
-});
-
-// ... (mantén tus otras rutas de películas igual pero con moviesRouter)
-
-// --- Manejo de Errores ---
-app.use((err, req, res, next) => {
-  console.error('Global Error:', err);
-  res.status(500).json({ error: 'Error interno del servidor' });
-});
-
-// --- Inicio del Servidor ---
-const PORT = process.env.PORT || 10000;
+// Servidor
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-  console.log(`📌 Rutas disponibles:`);
-  console.log(`- POST   /api/auth/login`);
-  console.log(`- GET    /api/movies`);
-  console.log(`- POST   /api/ftp/upload`);
+  console.log(`Servidor corriendo en http://localhost:${PORT}`);
 });
