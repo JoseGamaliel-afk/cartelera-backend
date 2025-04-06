@@ -27,7 +27,7 @@ const db = mysql.createPool({
   queueLimit: 0
 });
 
-// Verificar conexión a la base de datos
+// Verificar conexión a la base de dato
 db.getConnection((err, connection) => {
   if (err) {
     console.error('Error de conexión a la base de datos:', err);
