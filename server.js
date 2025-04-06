@@ -11,7 +11,7 @@ const helmet = require('helmet');
 const app = express();
 app.use(express.json());
 app.use(cors({
-  origin: 'https://cartelera-jw8a.onrender.com/',
+  origin: 'https://cartelera-jw8a.onrender.com',
   credentials: true
 }));
 app.use(helmet());
