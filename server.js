@@ -7,12 +7,11 @@ const cors = require('cors');
 const stream = require('stream');
 const xss = require('xss');
 const helmet = require('helmet');
-const path = require('path');
 
 const app = express();
 app.use(express.json());
 app.use(cors({
-  origin: ['https://cartelera-jw8a.onrender.com', 'http://localhost:4200'],
+  origin: 'https://cartelera-jw8a.onrender.com',
   credentials: true
 }));
 app.use(helmet());
@@ -28,7 +27,7 @@ const db = mysql.createPool({
   queueLimit: 0
 });
 
-// Verificar conexión a la base de datos
+// Verificar conexión a la base de dato
 db.getConnection((err, connection) => {
   if (err) {
     console.error('Error de conexión a la base de datos:', err);
@@ -135,6 +134,7 @@ app.delete('/delete', authMiddleware, async (req, res) => {
 });
 
 // --- Rutas de Películas ---
+// Cambio clave: GET /movies SIN autenticación
 app.get('/movies', (req, res) => {
   db.query('SELECT * FROM cine', (err, results) => {
     if (err) return res.status(500).send('Error en consulta a la base de datos.');
@@ -142,6 +142,7 @@ app.get('/movies', (req, res) => {
   });
 });
 
+// Operaciones administrativas (requieren autenticación)
 app.post('/movies', authMiddleware, (req, res) => {
   const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen } = req.body;
   if (!strNombre || !strGenero || !strSinapsis || !strHorario || !idSala || !strImagen) {
@@ -192,8 +193,7 @@ app.delete('/movies/:id', authMiddleware, (req, res) => {
 });
 
 // --- Login ---
-app.post('/api/login', (req, res) => {  // Cambiado a /api/login para evitar conflictos
-  console.log('Solicitud de login recibida'); // Para verificar en logs
+app.post('/login', (req, res) => {
   const { strNombre, strPwd } = req.body;
   if (!strNombre || !strPwd) {
     return res.status(400).json({ error: 'Faltan credenciales' });
@@ -201,19 +201,12 @@ app.post('/api/login', (req, res) => {  // Cambiado a /api/login para evitar con
 
   const query = 'SELECT id, strNombre, idEstadoUsuario, rol FROM login WHERE strNombre = ? AND strPwd = ? AND idEstadoUsuario = 1';
   db.query(query, [strNombre, strPwd], (err, results) => {
-    if (err) {
-      console.error('Error en la consulta:', err);
-      return res.status(500).json({ error: 'Error del servidor' });
-    }
-    if (results.length === 0) {
-      console.log('Credenciales inválidas para:', strNombre);
-      return res.status(401).json({ error: 'Credenciales inválidas o usuario inactivo' });
-    }
+    if (err) return res.status(500).json({ error: 'Error del servidor' });
+    if (results.length === 0) return res.status(401).json({ error: 'Credenciales inválidas o usuario inactivo' });
 
     const usuario = results[0];
     const fakeToken = Buffer.from(`${usuario.id}:${usuario.strNombre}`).toString('base64');
 
-    console.log('Login exitoso para:', usuario.strNombre); // Log de éxito
     res.json({
       id: usuario.id,
       nombre: usuario.strNombre,
@@ -225,13 +218,7 @@ app.post('/api/login', (req, res) => {  // Cambiado a /api/login para evitar con
 
 // --- Ruta de prueba ---
 app.get('/', (req, res) => {
-  res.send('Backend funcionando. Usa /api/login para autenticarte.');
-});
-
-// Manejo de rutas no encontradas
-app.use((req, res) => {
-  console.log(`Ruta no encontrada: ${req.method} ${req.url}`);
-  res.status(404).send('Ruta no encontrada');
+  res.send('Backend funcionando. Usa /login para autenticarte.');
 });
 
 // Probar conexión al servidor FTP
