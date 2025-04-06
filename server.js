@@ -1,19 +1,25 @@
-require('dotenv').config(); // Cargar variables de entorno
+require('dotenv').config(); // Variables de entorno
 const express = require('express');
 const multer = require('multer');
 const ftp = require('basic-ftp');
 const mysql = require('mysql2');
 const cors = require('cors');
 const stream = require('stream');
-const xss = require('xss'); // Para sanitizar entradas
-const helmet = require('helmet'); // Para agregar cabeceras de seguridad
+const xss = require('xss');
+const helmet = require('helmet');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
 
 const app = express();
 app.use(express.json());
 app.use(cors());
-app.use(helmet()); // Protección básica contra XSS y otras vulnerabilidades
+app.use(helmet());
 
-// Configuración de MySQL
+// === Configuración JWT ===
+const JWT_SECRET = process.env.JWT_SECRET || 'secret_key_para_desarrollo';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
+
+// === Configuración MySQL ===
 const db = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
@@ -24,21 +30,20 @@ const db = mysql.createPool({
   queueLimit: 0
 });
 
-// Verificar conexión a la base de datos
 db.getConnection((err, connection) => {
   if (err) {
-    console.error('Error de conexión a la base de datos:', err);
+    console.error('❌ Error de conexión a la base de datos:', err);
   } else {
-    console.log('Conexión exitosa a la base de datos');
+    console.log('✅ Conexión exitosa a la base de datos');
     connection.release();
   }
 });
 
-// Multer: almacenamiento en memoria para archivos subidos
+// === Multer para subir archivos en memoria ===
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-// Configuración FTP
+// === Configuración FTP ===
 const FTP_CONFIG = {
   host: process.env.FTP_HOST,
   user: process.env.FTP_USER,
@@ -49,8 +54,58 @@ const FTP_CONFIG = {
 const FTP_BASE_PATH = process.env.FTP_BASE_PATH;
 const PUBLIC_URL = process.env.PUBLIC_URL;
 
-// --- Rutas FTP ---
-app.post('/upload', upload.single('file'), async (req, res) => {
+// === Middleware JWT ===
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (!token) return res.sendStatus(401);
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.sendStatus(403);
+    req.user = user;
+    next();
+  });
+};
+
+// === Rutas de sesión con JWT ===
+app.post('/login', async (req, res) => {
+  const { strNombre, strPwd } = req.body;
+  if (!strNombre || !strPwd) {
+    return res.status(400).json({ error: 'Faltan credenciales' });
+  }
+
+  try {
+    const [results] = await db.promise().query(
+      'SELECT id, strNombre, strPwd, idEstadoUsuario, rol FROM login WHERE strNombre = ? AND idEstadoUsuario = 1',
+      [strNombre]
+    );
+
+    if (results.length === 0) {
+      return res.status(401).json({ error: 'Credenciales inválidas o usuario inactivo' });
+    }
+
+    const user = results[0];
+    const passwordMatch = await bcrypt.compare(strPwd, user.strPwd);
+    if (!passwordMatch) {
+      return res.status(401).json({ error: 'Credenciales inválidas' });
+    }
+
+    const token = jwt.sign(
+      { id: user.id, nombre: user.strNombre, rol: user.rol },
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN }
+    );
+
+    res.json({ id: user.id, nombre: user.strNombre, rol: user.rol, token });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// === Rutas FTP ===
+app.post('/upload', authenticateToken, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).send('No file uploaded.');
 
   try {
@@ -73,7 +128,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
   }
 });
 
-app.get('/list', async (req, res) => {
+app.get('/list', authenticateToken, async (req, res) => {
   try {
     const client = new ftp.Client();
     await client.access(FTP_CONFIG);
@@ -94,7 +149,7 @@ app.get('/list', async (req, res) => {
   }
 });
 
-app.delete('/delete', async (req, res) => {
+app.delete('/delete', authenticateToken, async (req, res) => {
   const { fileName } = req.body;
   if (!fileName) return res.status(400).send('File name is required.');
 
@@ -111,87 +166,73 @@ app.delete('/delete', async (req, res) => {
   }
 });
 
-// --- Rutas de Películas ---
-app.get('/movies', (req, res) => {
+// === Rutas de Películas (Protegidas) ===
+app.get('/movies', authenticateToken, (req, res) => {
   db.query('SELECT * FROM cine', (err, results) => {
     if (err) return res.status(500).send('Error en consulta a la base de datos.');
     res.send(results);
   });
 });
 
-app.post('/movies', (req, res) => {
+app.post('/movies', authenticateToken, (req, res) => {
+  if (req.user.rol !== 'admin') return res.sendStatus(403);
+
   const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen } = req.body;
   if (!strNombre || !strGenero || !strSinapsis || !strHorario || !idSala || !strImagen) {
     return res.status(400).json({ error: 'Faltan parámetros' });
   }
 
-  // Sanitización de entradas para evitar XSS
-  const sanitizedStrNombre = xss(strNombre);
-  const sanitizedStrGenero = xss(strGenero);
-  const sanitizedStrSinapsis = xss(strSinapsis);
-  const sanitizedStrHorario = xss(strHorario);
-  const sanitizedStrImagen = xss(strImagen);
-
   const query = `INSERT INTO cine (strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen)
                  VALUES (?, ?, ?, ?, ?, ?)`;
-  db.query(query, [sanitizedStrNombre, sanitizedStrGenero, sanitizedStrSinapsis, sanitizedStrHorario, idSala, sanitizedStrImagen], (err, result) => {
+
+  db.query(query, [
+    xss(strNombre),
+    xss(strGenero),
+    xss(strSinapsis),
+    xss(strHorario),
+    idSala,
+    xss(strImagen)
+  ], (err, result) => {
     if (err) return res.status(500).send('Error al agregar película.');
     res.status(201).send({ message: 'Película agregada correctamente', id: result.insertId });
   });
 });
 
-app.put('/movies/:id', (req, res) => {
+app.put('/movies/:id', authenticateToken, (req, res) => {
   const { id } = req.params;
   const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen } = req.body;
   if (!strNombre || !strGenero || !strSinapsis || !strHorario || !idSala || !strImagen) {
     return res.status(400).json({ error: 'Faltan parámetros' });
   }
 
-  // Sanitización de entradas
-  const sanitizedStrNombre = xss(strNombre);
-  const sanitizedStrGenero = xss(strGenero);
-  const sanitizedStrSinapsis = xss(strSinapsis);
-  const sanitizedStrHorario = xss(strHorario);
-  const sanitizedStrImagen = xss(strImagen);
-
   const query = `UPDATE cine SET strNombre = ?, strGenero = ?, strSinapsis = ?, strHorario = ?, idSala = ?, strImagen = ?
                  WHERE id = ?`;
-  db.query(query, [sanitizedStrNombre, sanitizedStrGenero, sanitizedStrSinapsis, sanitizedStrHorario, idSala, sanitizedStrImagen, id], (err) => {
+
+  db.query(query, [
+    xss(strNombre),
+    xss(strGenero),
+    xss(strSinapsis),
+    xss(strHorario),
+    idSala,
+    xss(strImagen),
+    id
+  ], (err) => {
     if (err) return res.status(500).send('Error al actualizar película.');
     res.send({ message: 'Película actualizada correctamente' });
   });
 });
 
-app.delete('/movies/:id', (req, res) => {
+app.delete('/movies/:id', authenticateToken, (req, res) => {
   const { id } = req.params;
+  if (req.user.rol !== 'admin') return res.sendStatus(403);
+
   db.query('DELETE FROM cine WHERE id = ?', [id], (err) => {
     if (err) return res.status(500).send('Error al eliminar película.');
     res.send({ message: 'Película eliminada correctamente' });
   });
 });
 
-// --- Inicio de sesión ---
-app.post('/login', (req, res) => {
-  const { strNombre, strPwd } = req.body;
-  if (!strNombre || !strPwd) {
-    return res.status(400).json({ error: 'Faltan credenciales' });
-  }
-
-  const query = 'SELECT id, strNombre, idEstadoUsuario, rol FROM login WHERE strNombre = ? AND strPwd = ? AND idEstadoUsuario = 1';
-  db.query(query, [strNombre, strPwd], (err, results) => {
-    if (err) return res.status(500).json({ error: 'Error del servidor' });
-    if (results.length === 0) return res.status(401).json({ error: 'Credenciales inválidas o usuario inactivo' });
-
-    const usuario = results[0];
-    res.json({
-      id: usuario.id,
-      nombre: usuario.strNombre,
-      rol: usuario.rol
-    });
-  });
-});
-
-// Probar conexión al servidor FTP
+// === Verificar conexión FTP al iniciar ===
 (async () => {
   try {
     const client = new ftp.Client();
@@ -203,8 +244,8 @@ app.post('/login', (req, res) => {
   }
 })();
 
-// Servidor
+// === Iniciar servidor ===
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Servidor corriendo en http://localhost:${PORT}`);
+  console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
 });
