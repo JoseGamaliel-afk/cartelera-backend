@@ -11,7 +11,7 @@ const helmet = require('helmet');
 const app = express();
 app.use(express.json());
 app.use(cors({
-  origin: 'https://cartelera-jw8a.onrender.com', // Cambia a tu URL de frontend
+  origin: 'http://localhost:4200',
   credentials: true
 }));
 app.use(helmet());
@@ -52,7 +52,7 @@ const FTP_CONFIG = {
 const FTP_BASE_PATH = process.env.FTP_BASE_PATH;
 const PUBLIC_URL = process.env.PUBLIC_URL;
 
-// --- Middleware de autenticación (simulado) ---
+// --- Middleware de autenticación ---
 function authMiddleware(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).send('Acceso no autorizado');
@@ -133,14 +133,16 @@ app.delete('/delete', authMiddleware, async (req, res) => {
   }
 });
 
-// --- Rutas de Películas (protegidas) ---
-app.get('/movies', authMiddleware, (req, res) => {
+// --- Rutas de Películas ---
+// Cambio clave: GET /movies SIN autenticación
+app.get('/movies', (req, res) => {
   db.query('SELECT * FROM cine', (err, results) => {
     if (err) return res.status(500).send('Error en consulta a la base de datos.');
     res.send(results);
   });
 });
 
+// Operaciones administrativas (requieren autenticación)
 app.post('/movies', authMiddleware, (req, res) => {
   const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen } = req.body;
   if (!strNombre || !strGenero || !strSinapsis || !strHorario || !idSala || !strImagen) {
@@ -190,7 +192,7 @@ app.delete('/movies/:id', authMiddleware, (req, res) => {
   });
 });
 
-// --- Login (genera token simulado) ---
+// --- Login ---
 app.post('/login', (req, res) => {
   const { strNombre, strPwd } = req.body;
   if (!strNombre || !strPwd) {
@@ -214,7 +216,7 @@ app.post('/login', (req, res) => {
   });
 });
 
-// --- Ruta de prueba (sin protección) ---
+// --- Ruta de prueba ---
 app.get('/', (req, res) => {
   res.send('Backend funcionando. Usa /login para autenticarte.');
 });
