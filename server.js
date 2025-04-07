@@ -53,7 +53,7 @@ const FTP_CONFIG = {
 const FTP_BASE_PATH = process.env.FTP_BASE_PATH;
 const PUBLIC_URL = process.env.PUBLIC_URL;
 
-// Middleware de autenticación
+// --- Middleware de autenticación ---
 function authMiddleware(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).send('Acceso no autorizado');
@@ -61,7 +61,7 @@ function authMiddleware(req, res, next) {
   try {
     const decoded = Buffer.from(token, 'base64').toString('utf-8');
     const [userId, userName] = decoded.split(':');
-
+    
     db.query('SELECT id FROM login WHERE id = ? AND strNombre = ?', [userId, userName], (err, results) => {
       if (err || results.length === 0) return res.status(401).send('Token inválido');
       req.user = { id: userId, nombre: userName };
@@ -72,7 +72,7 @@ function authMiddleware(req, res, next) {
   }
 }
 
-// Rutas FTP
+// --- Rutas FTP (protegidas) ---
 app.post('/upload', authMiddleware, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).send('No file uploaded.');
 
@@ -134,7 +134,7 @@ app.delete('/delete', authMiddleware, async (req, res) => {
   }
 });
 
-// Rutas de Películas
+// --- Rutas de Películas ---
 app.get('/movies', (req, res) => {
   db.query('SELECT * FROM cine', (err, results) => {
     if (err) return res.status(500).send('Error en consulta a la base de datos.');
@@ -143,8 +143,8 @@ app.get('/movies', (req, res) => {
 });
 
 app.post('/movies', authMiddleware, (req, res) => {
-  const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen, strTrailerURL } = req.body;
-  if (!strNombre || !strGenero || !strSinapsis || !strHorario || !idSala || !strImagen || !strTrailerURL) {
+  const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen } = req.body;
+  if (!strNombre || !strGenero || !strSinapsis || !strHorario || !idSala || !strImagen) {
     return res.status(400).json({ error: 'Faltan parámetros' });
   }
 
@@ -153,12 +153,10 @@ app.post('/movies', authMiddleware, (req, res) => {
   const sanitizedStrSinapsis = xss(strSinapsis);
   const sanitizedStrHorario = xss(strHorario);
   const sanitizedStrImagen = xss(strImagen);
-  const sanitizedStrTrailerURL = xss(strTrailerURL);
 
-  const query = `INSERT INTO cine (strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen, strTrailerURL)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)`;
-
-  db.query(query, [sanitizedStrNombre, sanitizedStrGenero, sanitizedStrSinapsis, sanitizedStrHorario, idSala, sanitizedStrImagen, sanitizedStrTrailerURL], (err, result) => {
+  const query = `INSERT INTO cine (strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen)
+                VALUES (?, ?, ?, ?, ?, ?)`;
+  db.query(query, [sanitizedStrNombre, sanitizedStrGenero, sanitizedStrSinapsis, sanitizedStrHorario, idSala, sanitizedStrImagen], (err, result) => {
     if (err) return res.status(500).send('Error al agregar película.');
     res.status(201).send({ message: 'Película agregada correctamente', id: result.insertId });
   });
@@ -166,8 +164,8 @@ app.post('/movies', authMiddleware, (req, res) => {
 
 app.put('/movies/:id', authMiddleware, (req, res) => {
   const { id } = req.params;
-  const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen, strTrailerURL } = req.body;
-  if (!strNombre || !strGenero || !strSinapsis || !strHorario || !idSala || !strImagen || !strTrailerURL) {
+  const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen } = req.body;
+  if (!strNombre || !strGenero || !strSinapsis || !strHorario || !idSala || !strImagen) {
     return res.status(400).json({ error: 'Faltan parámetros' });
   }
 
@@ -176,12 +174,10 @@ app.put('/movies/:id', authMiddleware, (req, res) => {
   const sanitizedStrSinapsis = xss(strSinapsis);
   const sanitizedStrHorario = xss(strHorario);
   const sanitizedStrImagen = xss(strImagen);
-  const sanitizedStrTrailerURL = xss(strTrailerURL);
 
-  const query = `UPDATE cine SET strNombre = ?, strGenero = ?, strSinapsis = ?, strHorario = ?, idSala = ?, strImagen = ?, strTrailerURL = ?
-                 WHERE id = ?`;
-
-  db.query(query, [sanitizedStrNombre, sanitizedStrGenero, sanitizedStrSinapsis, sanitizedStrHorario, idSala, sanitizedStrImagen, sanitizedStrTrailerURL, id], (err) => {
+  const query = `UPDATE cine SET strNombre = ?, strGenero = ?, strSinapsis = ?, strHorario = ?, idSala = ?, strImagen = ?
+                WHERE id = ?`;
+  db.query(query, [sanitizedStrNombre, sanitizedStrGenero, sanitizedStrSinapsis, sanitizedStrHorario, idSala, sanitizedStrImagen, id], (err) => {
     if (err) return res.status(500).send('Error al actualizar película.');
     res.send({ message: 'Película actualizada correctamente' });
   });
@@ -195,8 +191,9 @@ app.delete('/movies/:id', authMiddleware, (req, res) => {
   });
 });
 
-// Login
+// --- Login ---
 app.post('/login', (req, res) => {
+  console.log('Solicitud POST a /login recibida'); // Para verificar en logs
   const { strNombre, strPwd } = req.body;
   if (!strNombre || !strPwd) {
     return res.status(400).json({ error: 'Faltan credenciales' });
@@ -204,12 +201,19 @@ app.post('/login', (req, res) => {
 
   const query = 'SELECT id, strNombre, idEstadoUsuario, rol FROM login WHERE strNombre = ? AND strPwd = ? AND idEstadoUsuario = 1';
   db.query(query, [strNombre, strPwd], (err, results) => {
-    if (err) return res.status(500).json({ error: 'Error del servidor' });
-    if (results.length === 0) return res.status(401).json({ error: 'Credenciales inválidas o usuario inactivo' });
+    if (err) {
+      console.error('Error en la consulta:', err);
+      return res.status(500).json({ error: 'Error del servidor' });
+    }
+    if (results.length === 0) {
+      console.log('Credenciales inválidas para:', strNombre);
+      return res.status(401).json({ error: 'Credenciales inválidas o usuario inactivo' });
+    }
 
     const usuario = results[0];
     const fakeToken = Buffer.from(`${usuario.id}:${usuario.strNombre}`).toString('base64');
 
+    console.log('Login exitoso para:', usuario.strNombre);
     res.json({
       id: usuario.id,
       nombre: usuario.strNombre,
@@ -219,7 +223,7 @@ app.post('/login', (req, res) => {
   });
 });
 
-// Ruta de prueba
+// --- Ruta de prueba ---
 app.get('/', (req, res) => {
   res.send('Backend funcionando. Usa /login para autenticarte.');
 });
