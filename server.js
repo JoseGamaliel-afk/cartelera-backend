@@ -143,42 +143,101 @@ app.get('/movies', (req, res) => {
 });
 
 app.post('/movies', authMiddleware, (req, res) => {
-  const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen } = req.body;
+  const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen, strTrailerURL } = req.body;
+  
+  // Validación de campos requeridos
   if (!strNombre || !strGenero || !strSinapsis || !strHorario || !idSala || !strImagen) {
-    return res.status(400).json({ error: 'Faltan parámetros' });
+    return res.status(400).json({ error: 'Faltan parámetros requeridos' });
   }
 
-  const sanitizedStrNombre = xss(strNombre);
-  const sanitizedStrGenero = xss(strGenero);
-  const sanitizedStrSinapsis = xss(strSinapsis);
-  const sanitizedStrHorario = xss(strHorario);
-  const sanitizedStrImagen = xss(strImagen);
+  // Validación básica de URL si se proporciona
+  if (strTrailerURL && !isValidUrl(strTrailerURL)) {
+    return res.status(400).json({ error: 'URL del tráiler no válida' });
+  }
 
-  const query = `INSERT INTO cine (strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen)
-                VALUES (?, ?, ?, ?, ?, ?)`;
-  db.query(query, [sanitizedStrNombre, sanitizedStrGenero, sanitizedStrSinapsis, sanitizedStrHorario, idSala, sanitizedStrImagen], (err, result) => {
-    if (err) return res.status(500).send('Error al agregar película.');
-    res.status(201).send({ message: 'Película agregada correctamente', id: result.insertId });
+  // Sanitización de entradas
+  const sanitizedData = {
+    strNombre: xss(strNombre),
+    strGenero: xss(strGenero),
+    strSinapsis: xss(strSinapsis),
+    strHorario: xss(strHorario),
+    idSala: parseInt(idSala),
+    strImagen: xss(strImagen),
+    strTrailerURL: strTrailerURL ? xss(strTrailerURL) : null
+  };
+
+  const query = `INSERT INTO cine (strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen, strTrailerURL)
+                VALUES (?, ?, ?, ?, ?, ?, ?)`;
+  
+  db.query(query, [
+    sanitizedData.strNombre,
+    sanitizedData.strGenero,
+    sanitizedData.strSinapsis,
+    sanitizedData.strHorario,
+    sanitizedData.idSala,
+    sanitizedData.strImagen,
+    sanitizedData.strTrailerURL
+  ], (err, result) => {
+    if (err) {
+      console.error('Error al agregar película:', err);
+      return res.status(500).send('Error al agregar película.');
+    }
+    res.status(201).send({ 
+      message: 'Película agregada correctamente', 
+      id: result.insertId 
+    });
   });
 });
 
 app.put('/movies/:id', authMiddleware, (req, res) => {
   const { id } = req.params;
-  const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen } = req.body;
+  const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen, strTrailerURL } = req.body;
+  
+  // Validación de campos requeridos
   if (!strNombre || !strGenero || !strSinapsis || !strHorario || !idSala || !strImagen) {
-    return res.status(400).json({ error: 'Faltan parámetros' });
+    return res.status(400).json({ error: 'Faltan parámetros requeridos' });
   }
 
-  const sanitizedStrNombre = xss(strNombre);
-  const sanitizedStrGenero = xss(strGenero);
-  const sanitizedStrSinapsis = xss(strSinapsis);
-  const sanitizedStrHorario = xss(strHorario);
-  const sanitizedStrImagen = xss(strImagen);
+  // Validación básica de URL si se proporciona
+  if (strTrailerURL && !isValidUrl(strTrailerURL)) {
+    return res.status(400).json({ error: 'URL del tráiler no válida' });
+  }
 
-  const query = `UPDATE cine SET strNombre = ?, strGenero = ?, strSinapsis = ?, strHorario = ?, idSala = ?, strImagen = ?
+  // Sanitización de entradas
+  const sanitizedData = {
+    strNombre: xss(strNombre),
+    strGenero: xss(strGenero),
+    strSinapsis: xss(strSinapsis),
+    strHorario: xss(strHorario),
+    idSala: parseInt(idSala),
+    strImagen: xss(strImagen),
+    strTrailerURL: strTrailerURL ? xss(strTrailerURL) : null
+  };
+
+  const query = `UPDATE cine SET 
+                strNombre = ?, 
+                strGenero = ?, 
+                strSinapsis = ?, 
+                strHorario = ?, 
+                idSala = ?, 
+                strImagen = ?,
+                strTrailerURL = ?
                 WHERE id = ?`;
-  db.query(query, [sanitizedStrNombre, sanitizedStrGenero, sanitizedStrSinapsis, sanitizedStrHorario, idSala, sanitizedStrImagen, id], (err) => {
-    if (err) return res.status(500).send('Error al actualizar película.');
+  
+  db.query(query, [
+    sanitizedData.strNombre,
+    sanitizedData.strGenero,
+    sanitizedData.strSinapsis,
+    sanitizedData.strHorario,
+    sanitizedData.idSala,
+    sanitizedData.strImagen,
+    sanitizedData.strTrailerURL,
+    id
+  ], (err) => {
+    if (err) {
+      console.error('Error al actualizar película:', err);
+      return res.status(500).send('Error al actualizar película.');
+    }
     res.send({ message: 'Película actualizada correctamente' });
   });
 });
@@ -186,14 +245,17 @@ app.put('/movies/:id', authMiddleware, (req, res) => {
 app.delete('/movies/:id', authMiddleware, (req, res) => {
   const { id } = req.params;
   db.query('DELETE FROM cine WHERE id = ?', [id], (err) => {
-    if (err) return res.status(500).send('Error al eliminar película.');
+    if (err) {
+      console.error('Error al eliminar película:', err);
+      return res.status(500).send('Error al eliminar película.');
+    }
     res.send({ message: 'Película eliminada correctamente' });
   });
 });
 
 // --- Login ---
 app.post('/login', (req, res) => {
-  console.log('Solicitud POST a /login recibida'); // Para verificar en logs
+  console.log('Solicitud POST a /login recibida');
   const { strNombre, strPwd } = req.body;
   if (!strNombre || !strPwd) {
     return res.status(400).json({ error: 'Faltan credenciales' });
@@ -227,6 +289,18 @@ app.post('/login', (req, res) => {
 app.get('/', (req, res) => {
   res.send('Backend funcionando. Usa /login para autenticarte.');
 });
+
+// Función para validar URLs
+function isValidUrl(url) {
+  try {
+    new URL(url);
+    return true;
+  } catch (err) {
+    // Patrón alternativo para navegadores antiguos
+    const pattern = /^(https?|ftp):\/\/[^\s/$.?#].[^\s]*$/i;
+    return pattern.test(url);
+  }
+}
 
 // Probar conexión al servidor FTP
 (async () => {
