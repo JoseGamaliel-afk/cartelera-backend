@@ -7,7 +7,6 @@ const cors = require('cors');
 const stream = require('stream');
 const xss = require('xss');
 const helmet = require('helmet');
-const path = require('path');
 
 const app = express();
 app.use(express.json());
@@ -134,7 +133,7 @@ app.delete('/delete', authMiddleware, async (req, res) => {
   }
 });
 
-// --- Rutas de Películas ---
+// --- Rutas de Películas (actualizadas con strTrailerURL) ---
 app.get('/movies', (req, res) => {
   db.query('SELECT * FROM cine', (err, results) => {
     if (err) return res.status(500).send('Error en consulta a la base de datos.');
@@ -143,41 +142,78 @@ app.get('/movies', (req, res) => {
 });
 
 app.post('/movies', authMiddleware, (req, res) => {
-  const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen } = req.body;
+  const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen, strTrailerURL } = req.body;
+  
+  // Validación de campos obligatorios
   if (!strNombre || !strGenero || !strSinapsis || !strHorario || !idSala || !strImagen) {
-    return res.status(400).json({ error: 'Faltan parámetros' });
+    return res.status(400).json({ error: 'Faltan parámetros obligatorios' });
   }
 
+  // Sanitización
   const sanitizedStrNombre = xss(strNombre);
   const sanitizedStrGenero = xss(strGenero);
   const sanitizedStrSinapsis = xss(strSinapsis);
   const sanitizedStrHorario = xss(strHorario);
   const sanitizedStrImagen = xss(strImagen);
+  const sanitizedTrailerURL = xss(strTrailerURL || ''); // Campo opcional
 
-  const query = `INSERT INTO cine (strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen)
-                VALUES (?, ?, ?, ?, ?, ?)`;
-  db.query(query, [sanitizedStrNombre, sanitizedStrGenero, sanitizedStrSinapsis, sanitizedStrHorario, idSala, sanitizedStrImagen], (err, result) => {
+  const query = `INSERT INTO cine 
+                (strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen, strTrailerURL) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)`;
+  
+  db.query(query, [
+    sanitizedStrNombre,
+    sanitizedStrGenero,
+    sanitizedStrSinapsis,
+    sanitizedStrHorario,
+    idSala,
+    sanitizedStrImagen,
+    sanitizedTrailerURL
+  ], (err, result) => {
     if (err) return res.status(500).send('Error al agregar película.');
-    res.status(201).send({ message: 'Película agregada correctamente', id: result.insertId });
+    res.status(201).send({ 
+      message: 'Película agregada correctamente', 
+      id: result.insertId 
+    });
   });
 });
 
 app.put('/movies/:id', authMiddleware, (req, res) => {
   const { id } = req.params;
-  const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen } = req.body;
+  const { strNombre, strGenero, strSinapsis, strHorario, idSala, strImagen, strTrailerURL } = req.body;
+  
   if (!strNombre || !strGenero || !strSinapsis || !strHorario || !idSala || !strImagen) {
-    return res.status(400).json({ error: 'Faltan parámetros' });
+    return res.status(400).json({ error: 'Faltan parámetros obligatorios' });
   }
 
+  // Sanitización
   const sanitizedStrNombre = xss(strNombre);
   const sanitizedStrGenero = xss(strGenero);
   const sanitizedStrSinapsis = xss(strSinapsis);
   const sanitizedStrHorario = xss(strHorario);
   const sanitizedStrImagen = xss(strImagen);
+  const sanitizedTrailerURL = xss(strTrailerURL || '');
 
-  const query = `UPDATE cine SET strNombre = ?, strGenero = ?, strSinapsis = ?, strHorario = ?, idSala = ?, strImagen = ?
+  const query = `UPDATE cine SET 
+                strNombre = ?, 
+                strGenero = ?, 
+                strSinapsis = ?, 
+                strHorario = ?, 
+                idSala = ?, 
+                strImagen = ?,
+                strTrailerURL = ?
                 WHERE id = ?`;
-  db.query(query, [sanitizedStrNombre, sanitizedStrGenero, sanitizedStrSinapsis, sanitizedStrHorario, idSala, sanitizedStrImagen, id], (err) => {
+  
+  db.query(query, [
+    sanitizedStrNombre,
+    sanitizedStrGenero,
+    sanitizedStrSinapsis,
+    sanitizedStrHorario,
+    idSala,
+    sanitizedStrImagen,
+    sanitizedTrailerURL,
+    id
+  ], (err) => {
     if (err) return res.status(500).send('Error al actualizar película.');
     res.send({ message: 'Película actualizada correctamente' });
   });
@@ -193,7 +229,7 @@ app.delete('/movies/:id', authMiddleware, (req, res) => {
 
 // --- Login ---
 app.post('/login', (req, res) => {
-  console.log('Solicitud POST a /login recibida'); // Para verificar en logs
+  console.log('Solicitud POST a /login recibida');
   const { strNombre, strPwd } = req.body;
   if (!strNombre || !strPwd) {
     return res.status(400).json({ error: 'Faltan credenciales' });
